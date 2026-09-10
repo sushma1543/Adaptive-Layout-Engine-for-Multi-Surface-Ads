@@ -11,7 +11,7 @@
     "start": "node scripts/serve.mjs",
     "lint": "oxlint app src scripts tests",
     "format": "oxfmt",
-    "test:resolver": "tsc src/spec.ts src/surfaces.ts src/resolver.ts src/campaigns.ts tests/resolver.test.ts --outDir .test-build --module nodenext --moduleResolution nodenext --target es2022 --strict --skipLibCheck && node --test .test-build/tests/resolver.test.js",
+    "test:resolver": "tsc tests/resolver.test.ts tests/rendering.test.tsx --outDir .test-build --module nodenext --moduleResolution nodenext --target es2022 --jsx react-jsx --strict --skipLibCheck && node --test .test-build/tests/resolver.test.js .test-build/tests/rendering.test.js",
     "test": "npm run test:resolver",
     "typecheck": "tsc --noEmit"
   },

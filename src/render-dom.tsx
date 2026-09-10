@@ -1,8 +1,10 @@
 'use client';
 
-import type { CSSProperties } from 'react';
-import type { AdSpec, HeroImageElement } from './spec.js';
-import type { Rect, ResolvedElement, ResolvedLayout } from './resolver.js';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import type { AdSpec } from './spec.js';
+import type { Rect, ResolvedLayout } from './resolver.js';
+import { AD_FONT } from './typography.js';
+import { previewGeometry } from './preview-geometry.js';
 
 type RendererProps = {
   ad: AdSpec;
@@ -12,155 +14,80 @@ type RendererProps = {
   onAction?: () => void;
 };
 
-function scaleStyle(box: Rect, layout: ResolvedLayout): CSSProperties {
-  const { width, height } = layout.surface;
-  return {
-    left: `${(box.x / width) * 100}%`,
-    top: `${(box.y / height) * 100}%`,
-    width: `${(box.width / width) * 100}%`,
-    height: `${(box.height / height) * 100}%`,
-  };
+function boxStyle(box: Rect): CSSProperties {
+  return { left: box.x, top: box.y, width: box.width, height: box.height };
 }
 
-function elementSource(ad: AdSpec, resolved: ResolvedElement) {
-  return ad.elements.find((element) => element.id === resolved.id);
-}
-
-function HeroArtwork({ element, art }: { element: HeroImageElement; art: AdSpec['theme']['artwork'] }) {
-  if (element.src) {
-    const focal = element.focalPoint ?? { x: 50, y: 50 };
-    // oxlint-disable-next-line next/no-img-element
-    return <img className="hero-upload" src={element.src} alt={element.alt} style={{ objectPosition: `${focal.x}% ${focal.y}%` }} />;
-  }
-  // The procedural fallback is a visual region with a meaningful accessible label.
+/** Native-pixel renderer. Parent previews may uniformly scale this whole canvas. */
+export function ResolvedAd({ ad, layout, showSafeArea = false, showBoxes = false, onAction }: RendererProps) {
+  const canvasStyle = {
+    width: layout.surface.width, height: layout.surface.height,
+    background: ad.theme.background, color: ad.theme.foreground ?? '#ffffff',
+    fontFamily: AD_FONT,
+    '--theme-accent': ad.theme.accent,
+    '--theme-accent-ink': ad.theme.accentInk ?? '#111111',
+  } as CSSProperties;
   return (
-    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
-    <div className={`hero-art hero-art-${art}`} aria-label={element.alt} role="img">
-      <i className="art-glow art-glow-one" />
-      <i className="art-glow art-glow-two" />
-      <i className="art-object art-object-one" />
-      <i className="art-object art-object-two" />
-      <i className="art-detail art-detail-one" />
-      <i className="art-detail art-detail-two" />
+    <div className="resolved-ad" style={canvasStyle} aria-label={ad.name + ' on ' + layout.surface.name} data-native-width={layout.surface.width} data-native-height={layout.surface.height}>
+      {layout.elements.filter(element => element.visible && element.box).map(element => {
+        const source = ad.elements.find(item => item.id === element.id);
+        if (!source || !element.box) return null;
+        const style: CSSProperties = {
+          ...boxStyle(element.box),
+          ...(element.text ? { fontSize: element.text.fontSize, fontWeight: element.text.fontWeight, lineHeight: element.text.lineHeight } : {}),
+        };
+        const debug = showBoxes ? ' show-element-bounds' : '';
+        if (source.type === 'image' && source.role === 'hero') {
+          const fallback = { runner: '/assets/running-shoe-studio.png', serum: '/assets/serum-studio.png', coffee: '/assets/open-table-no7.png', audio: '/assets/headphones-studio.png' }[ad.theme.artwork];
+          const focal = source.focalPoint ?? { x: 50, y: 50 };
+          return (
+            <div key={source.id} className={'ad-element ad-hero' + debug} style={style} data-element={source.id}>
+              {/* Native local images keep this renderer independent of the hosting framework. */}
+              {/* oxlint-disable-next-line next/no-img-element */}
+              <img className="hero-upload" src={source.src || fallback} alt={source.alt} style={{ objectFit: source.fit ?? 'contain', objectPosition: focal.x + '% ' + focal.y + '%' }} onError={event => { if (event.currentTarget.getAttribute('src') !== fallback) event.currentTarget.src = fallback; }} />
+            </div>
+          );
+        }
+        if (!element.text) return null;
+        if (source.type === 'button') return (
+          <button key={source.id} type="button" className={'ad-element ad-action' + debug} style={style} onClick={onAction} data-element={source.id} aria-label={source.label} title={element.text.truncated ? source.label : undefined}>
+            {element.text.lines.join(' ')}
+          </button>
+        );
+        const content = source.type === 'text' ? source.text : ad.brand;
+        return (
+          <div key={source.id} className={'ad-element ad-copy' + (source.type === 'text' && source.treatment === 'price' ? ' ad-copy-price' : '') + debug} style={style} data-element={source.id} aria-label={content} title={element.text.truncated ? content : undefined}>
+            {element.text.lines.map((line, index) => <span key={index} style={{ height: element.text!.fontSize * element.text!.lineHeight }}>{line}</span>)}
+          </div>
+        );
+      })}
+      {showSafeArea && <div className="safe-area" style={boxStyle(layout.safeFrame)} aria-hidden="true" />}
     </div>
   );
 }
 
-function Wordmark({ ad }: { ad: AdSpec }) {
-  const initials = ad.brand
-    .split(/\s+/)
-    .map((word) => word[0])
-    .join('')
-    .slice(0, 2);
+/** One scale for x/y geometry AND typography, including capped tall previews. */
+export function PosterPreview(props: RendererProps & { maxHeight?: number; nativeSize?: boolean }) {
+  const { maxHeight = 480, nativeSize = false } = props;
+  const container = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState(280);
+  useEffect(() => {
+    const node = container.current;
+    if (!node) return;
+    const observer = new ResizeObserver(entries => setAvailableWidth(entries[0].contentRect.width));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const geometry = nativeSize
+    ? { scale: 1, width: props.layout.surface.width, height: props.layout.surface.height }
+    : previewGeometry(props.layout.surface.width, props.layout.surface.height, availableWidth, maxHeight);
   return (
-    <span className="ad-wordmark" aria-label={`${ad.brand} logo`}>
-      <i>{initials}</i>
-      <b>{ad.brand}</b>
-    </span>
-  );
-}
-
-function VisibleElement({
-  resolved,
-  ad,
-  layout,
-  showBoxes,
-  onAction,
-}: {
-  resolved: ResolvedElement;
-  ad: AdSpec;
-  layout: ResolvedLayout;
-  showBoxes: boolean;
-  onAction?: () => void;
-}) {
-  const source = elementSource(ad, resolved);
-  if (!resolved.visible || !resolved.box || !source) return null;
-  const debug = showBoxes ? 'show-element-bounds' : '';
-  const style = scaleStyle(resolved.box, layout);
-  if (source.type === 'image' && source.role === 'hero') {
-    return (
-      <div className={`ad-element ad-hero ${debug}`} style={style} data-element={source.id}>
-        <HeroArtwork element={source} art={ad.theme.artwork} />
+    <div ref={container} className={'poster-preview' + (nativeSize ? ' native-size' : '')}>
+      <div className="poster-preview-frame" style={{ width: geometry.width, height: geometry.height }}>
+        <div className="poster-preview-stage" style={{ transform: 'scale(' + geometry.scale + ')' }}>
+          <ResolvedAd {...props} />
+        </div>
       </div>
-    );
-  }
-  if (source.type === 'image' && source.role === 'branding') {
-    return (
-      <div className={`ad-element ad-brand ${debug}`} style={style} data-element={source.id}>
-        <Wordmark ad={ad} />
-      </div>
-    );
-  }
-  if (source.type === 'text' && resolved.text) {
-    return (
-      <div
-        className={`ad-element ad-copy ad-copy-${source.treatment ?? 'body'} ${resolved.status === 'truncated' ? 'is-truncated' : ''} ${debug}`}
-        style={{
-          ...style,
-          fontSize: `calc(var(--ad-unit) * ${resolved.text.fontSize})`,
-          lineHeight: resolved.text.lineHeight,
-        }}
-        data-element={source.id}
-      >
-        {resolved.text.lines.map((line, index) => (
-          <span key={`${source.id}-${index}`}>{line}</span>
-        ))}
-      </div>
-    );
-  }
-  if (source.type === 'button' && resolved.text) {
-    return (
-      <button
-        type="button"
-        className={`ad-element ad-action ${debug}`}
-        style={{
-          ...style,
-          fontSize: `calc(var(--ad-unit) * ${resolved.text.fontSize})`,
-        }}
-        onClick={onAction}
-        data-element={source.id}
-      >
-        {resolved.text.lines.join(' ')} <span aria-hidden="true">↗</span>
-      </button>
-    );
-  }
-  return null;
-}
-
-/**
- * DOM renderer only: every position, size and font scale comes from
- * ResolvedLayout. It has no surface id checks and no responsive layout rules.
- */
-export function ResolvedAd({
-  ad,
-  layout,
-  showSafeArea = false,
-  showBoxes = false,
-  onAction,
-}: RendererProps) {
-  const { surface, safeFrame } = layout;
-  const canvasStyle = {
-    aspectRatio: `${surface.width} / ${surface.height}`,
-    '--ad-unit': `calc(100cqw / ${surface.width})`,
-  } as CSSProperties;
-  return (
-    <div
-      className={`resolved-ad theme-${ad.theme.id}`}
-      style={{ ...canvasStyle, background: ad.theme.background, color: ad.theme.foreground ?? '#ffffff' }}
-      aria-label={`${ad.name} on ${surface.name}`}
-    >
-      <div className="ad-atmosphere" aria-hidden="true" />
-      {layout.elements
-        .filter((element) => element.role === 'hero')
-        .map((element) => (
-          <VisibleElement key={element.id} resolved={element} ad={ad} layout={layout} showBoxes={showBoxes} onAction={onAction} />
-        ))}
-      {layout.elements
-        .filter((element) => element.role !== 'hero')
-        .map((element) => (
-          <VisibleElement key={element.id} resolved={element} ad={ad} layout={layout} showBoxes={showBoxes} onAction={onAction} />
-        ))}
-      {showSafeArea && <div className="safe-area" style={scaleStyle(safeFrame, layout)} aria-hidden="true" />}
     </div>
   );
 }

@@ -39,6 +39,7 @@ export type HeroImageElement = ElementBase<'image', 'hero'> & {
   alt: string;
   /** An uploaded local data URL may replace the built-in art direction. */
   src?: string;
+  fit?: 'contain' | 'cover';
   focalPoint?: { x: number; y: number };
 };
 
@@ -134,6 +135,7 @@ function validateElementShape(element: AdElement): void {
     }
     if (!element.alt.trim()) fail(`${id} needs meaningful alternative text.`);
     if (element.role === 'hero') {
+      if (element.fit !== undefined && !['contain', 'cover'].includes(element.fit)) fail('Image fit must be contain or cover.');
       if (!isLocalRasterSource(element.src)) fail(`${id} has an unsafe image source.`);
       const focal = element.focalPoint;
       if (focal && (!Number.isFinite(focal.x) || !Number.isFinite(focal.y) || focal.x < 0 || focal.x > 100 || focal.y < 0 || focal.y > 100)) {
@@ -263,11 +265,13 @@ export function parseAd(value: unknown): AdSpec {
     }
     if (type === 'image') {
       if (role === 'hero') {
+        const fit = input.fit;
+        if (fit !== undefined && fit !== 'contain' && fit !== 'cover') fail('Image fit must be contain or cover.');
         const src = input.src;
         if (src !== undefined && (typeof src !== 'string' || !isLocalRasterSource(src))) fail(`${base.id} has an unsafe image source.`);
         const focalPoint = input.focalPoint;
         if (focalPoint !== undefined && (!isRecord(focalPoint) || typeof focalPoint.x !== 'number' || typeof focalPoint.y !== 'number')) fail(`${base.id} has an invalid focal point.`);
-        return { id: base.id, type: 'image', role: 'hero', priority: base.priority, ...(base.required === undefined ? {} : { required: base.required }), alt: string(input.alt, `${base.id} alt`), ...(src === undefined ? {} : { src }), ...(focalPoint === undefined ? {} : { focalPoint: focalPoint as { x: number; y: number } }) };
+        return { id: base.id, type: 'image', role: 'hero', priority: base.priority, ...(base.required === undefined ? {} : { required: base.required }), alt: string(input.alt, `${base.id} alt`), ...(fit === undefined ? {} : { fit }), ...(src === undefined ? {} : { src }), ...(focalPoint === undefined ? {} : { focalPoint: focalPoint as { x: number; y: number } }) };
       }
       if (role === 'branding') {
         const mark = input.mark;

@@ -35,6 +35,9 @@ export function defineSurface<const T extends SurfaceProfile>(profile: T): T {
   if (!finitePositive(profile.width) || !finitePositive(profile.height)) {
     throw new SurfaceValidationError(`${profile.name} needs positive dimensions.`);
   }
+  if (!Number.isInteger(profile.width) || !Number.isInteger(profile.height) || profile.width > 8192 || profile.height > 8192) {
+    throw new SurfaceValidationError(`${profile.name} needs whole-pixel dimensions no larger than 8192px.`);
+  }
   if (!profile.safeArea || typeof profile.safeArea !== 'object') {
     throw new SurfaceValidationError(`${profile.name} needs a complete safe area.`);
   }
@@ -158,7 +161,30 @@ export const bonusSurfaces = [
   }),
 ] as const;
 
-export const demoSurfaces = [...requiredSurfaces, ...bonusSurfaces] as const;
+export const additionalSurfaces = [
+  defineSurface({
+    id: 'social-story', name: 'Social story', context: '1080 × 1920 · Story placement',
+    width: 1080, height: 1920, safeArea: { top: 160, right: 60, bottom: 200, left: 60 },
+    minTextSize: 28, minTapTarget: 72, touchOnly: true, viewingDistance: 'near',
+  }),
+  defineSurface({
+    id: 'editorial-feed', name: 'Editorial feed', context: '1080 × 1350 · Portrait feed',
+    width: 1080, height: 1350, safeArea: { top: 54, right: 54, bottom: 54, left: 54 },
+    minTextSize: 26, minTapTarget: 64, touchOnly: true, viewingDistance: 'near',
+  }),
+  defineSurface({
+    id: 'desktop-billboard', name: 'Desktop billboard', context: '1600 × 900 · Web display',
+    width: 1600, height: 900, safeArea: { top: 48, right: 64, bottom: 48, left: 64 },
+    minTextSize: 24, minTapTarget: 48, viewingDistance: 'arm-length',
+  }),
+  defineSurface({
+    id: 'transit-display', name: 'Transit display', context: '900 × 1600 · Station poster',
+    width: 900, height: 1600, safeArea: { top: 72, right: 54, bottom: 72, left: 54 },
+    minTextSize: 32, viewingDistance: 'far',
+  }),
+] as const;
+
+export const demoSurfaces = [...requiredSurfaces, ...bonusSurfaces, ...additionalSurfaces] as const;
 
 export function makeInterviewSurface(input: {
   width: number;

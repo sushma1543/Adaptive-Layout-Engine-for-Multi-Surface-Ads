@@ -53,7 +53,7 @@ flowchart TB
 | src/spec.ts | Ad element union, campaign theme, defineAd validation, safe local image-source checks | Surface logic, rectangles, DOM |
 | src/surfaces.ts | SurfaceProfile, defineSurface validation, required profiles, unknown-surface factory | Candidate selection, rendering |
 | src/resolver.ts | Candidate generation, text fitting, placement, degradation, scoring, resolved output, geometry assertions | JSX, CSS, browser state |
-| src/render-dom.tsx | Converts resolved physical rectangles into percentage-based DOM styles | Composition decisions or media queries for ad layout |
+| src/render-dom.tsx | Renders physical-pixel boxes and text; a separate preview wrapper scales the full canvas | Composition decisions or media queries for ad layout |
 | src/export.ts | Consumes ResolvedLayout to create SVG, PNG, and campaign ZIP files | Re-running a second layout algorithm |
 | src/campaigns.ts | Realistic declarative demo campaigns and themes | Solver policy |
 | src/App.tsx | User edits, surface picker, debug overlays, inspector, export actions, local working copy | Layout mathematics |
@@ -125,7 +125,7 @@ The resolver output is intentionally a renderer contract:
 type ResolvedLayout = {
   surface: SurfaceProfile;
   safeFrame: Rect;
-  composition: "stack" | "split" | "ribbon";
+  composition: "stack" | "editorial" | "split" | "ribbon";
   score: number;
   elements: ResolvedElement[];
   decisions: LayoutDecision[];
@@ -137,7 +137,7 @@ type ResolvedLayout = {
 };
 ~~~
 
-Each visible ResolvedElement carries a Rect in physical surface pixels plus a status of placed, truncated, or dropped. Text additionally carries the exact lines, font size, line height, and truncation state. A renderer therefore has nothing left to infer about placement.
+Each visible ResolvedElement carries a Rect in physical surface pixels plus a status of placed, truncated, or dropped. Text additionally carries the exact lines, font size, font weight, line height, and truncation state. A renderer therefore has nothing left to infer about placement.
 
 ## Resolver pipeline
 
@@ -175,13 +175,14 @@ Every subsequent candidate uses this frame. There is no second set of CSS margin
 
 ### 2. Generic candidates
 
-The engine has three reusable candidates:
+The engine has four reusable candidates:
 
 | Candidate | Natural geometry | Region split |
 | --- | --- | --- |
 | stack | Tall or near-square surfaces | Hero on top, copy below |
+| editorial | Square or moderate portrait geometry | Copy and action above the hero |
 | split | Wide but not extremely shallow surfaces | Copy at left, hero at right |
-| ribbon | Very wide, shallow surfaces | Compact horizontal hero-and-copy treatment |
+| ribbon | Very wide, shallow surfaces | Hero, copy, and an independent centered action region |
 
 Each candidate carries a target aspect ratio, initial hero share, minimum hero share, and adjustment step. The resolver runs every candidate against the actual safe-frame aspect ratio. A candidate is neither selected nor rejected because a profile has a particular id.
 
@@ -191,7 +192,7 @@ For one candidate and one hero share, the solver:
 
 1. Creates hero and copy regions with a proportional gap.
 2. Protects the required hero, primary headline, and CTA.
-3. Reserves the action region from the bottom of the copy region. Its height is at least the surface tap target and sufficient for its fitted label.
+3. Reserves the action region from the bottom of the copy region, or independently on the right for the ribbon candidate. Its height is at least the surface tap target and sufficient for its fitted label.
 4. Places branding if it remains included.
 5. Sorts text semantically, then fits it into the remaining vertical space.
 6. Produces a box for every visible element and checks all layout invariants.
@@ -200,19 +201,20 @@ The implementation is a priority-aware box model rather than an attempt to repro
 
 ### 4. Text fitting
 
-The text fitter uses a conservative width model:
+The text fitter accepts a renderer-independent TextMeasurer function. In the mounted browser UI, typography.ts injects Canvas measureText with the exact Arial family and resolved weight. Standalone calls and server rendering use a conservative width model:
 
 - wide and uppercase characters consume more estimated width than narrow punctuation;
 - words wrap before exceeding the allocated box width;
 - font size decreases only until its permitted minimum;
 - the resolver enforces the element’s configured line limit;
-- if more text remains, the final visible line ends in an ellipsis.
+- if more text remains, the final visible line ends in an ellipsis;
+- every resulting line must still fit horizontally and vertically at its resolved metrics; even an ellipsis too wide for a tiny frame causes candidate rejection.
 
 The result is carried in ResolvedText, so the DOM and SVG renderers use the same resolved line breaks and font metrics. This avoids a preview/export mismatch.
 
 ### 5. Degradation order
 
-The solver does not begin by dropping content. It tries the following phases for each candidate:
+The resolver first searches all candidates without shortening protected text. Only if that entire search fails does it repeat with explicit shortening allowed. Within each candidate it tries these phases:
 
 | Phase | Action | Reason |
 | --- | --- | --- |
@@ -221,7 +223,7 @@ The solver does not begin by dropping content. It tries the following phases for
 | 3 | Remove optional elements by descending numeric priority | Preserve the message and interaction first |
 | 4 | Reject the candidate if required content still cannot fit | Never output clipping or overlap |
 
-Optional elements are sorted from priority 4 down to priority 1; elements at the same priority use a deterministic role order. In the supplied campaign, the branding mark is eligible before the body, body before price, and protected headline/hero/CTA are never deliberately removed. A required CTA always keeps its hard tap target; if its label exceeds the available width, the label receives an explicit ellipsis while the button remains usable.
+Optional elements above priority 1 are sorted from priority 4 down to priority 2; elements at the same priority use a deterministic role order. In the supplied campaign, the branding mark is eligible before the body, body before price, and protected headline/hero/CTA are never deliberately removed. A required CTA always keeps its hard tap target; if its label exceeds the available width, the label receives an explicit ellipsis while the button remains usable.
 
 The resolver records every removal in LayoutDecision. The demo’s inspector exposes this trace, so a reviewer can answer “why did this element disappear?” from output data rather than guesses.
 
@@ -253,16 +255,19 @@ The highest-scoring valid candidate becomes the answer. If no candidate can hono
 
 ### DOM
 
-ResolvedAd converts physical-pixel boxes into percentage values relative to the actual surface:
+ResolvedAd uses the surface's exact native width and height. Each element is absolutely positioned in native pixels with the resolver's font size, font weight, line height and explicit line boxes. Text lines are block elements, so a parent flex layout cannot shrink their heights.
+
+PosterPreview measures the available preview width and computes:
 
 ~~~ts
-left   = box.x / surface.width  * 100%
-top    = box.y / surface.height * 100%
-width  = box.width / surface.width  * 100%
-height = box.height / surface.height * 100%
+scale = Math.min(availableWidth / surface.width, maxHeight / surface.height, 1)
+previewWidth = surface.width * scale
+previewHeight = surface.height * scale
 ~~~
 
-Font sizes use the same surface-relative unit. The DOM renderer can therefore scale a preview for the desktop UI while preserving the geometric decision already made by the resolver. It only maps boxes to HTML elements; it does not decide which box goes where.
+A single CSS transform scales the entire native canvas, including fonts and geometry. The wrapper reserves the scaled dimensions and clips transformed overflow. This is only a viewing transform: each surface is still independently recomposed by the TypeScript solver. Actual pixels disables preview scaling and enables scrolling.
+
+resolveSafely catches infeasible constraints for each surface card. Editing one campaign cannot crash the whole matrix when one custom profile becomes impossible.
 
 ### Export
 
@@ -270,7 +275,9 @@ The export module consumes the same ResolvedLayout:
 
 - SVG uses resolved rectangles and resolved text lines directly.
 - PNG rasterizes that SVG at the profile’s native pixel dimensions.
-- The campaign kit ZIP contains an SVG for every active surface, the declarative campaign JSON, and a manifest listing surface dimensions, selected composition, and dropped elements.
+- Portable SVG and JSON embed the selected image as a data URL, so they work outside the project.
+- The campaign kit ZIP contains an SVG for every active surface, the portable campaign JSON, and a manifest listing surface dimensions, selected composition, dropped/shortened elements and decisions. It uses the same injected text measurer as the editor.
+- SVG reproduces image contain/cover fitting and focal position using intrinsic image dimensions and a clipping viewport. CTA labels are centered; text uses resolved weights and theme colors.
 
 This single-layout-to-many-renderers boundary prevents a separate export layout from drifting away from the demo preview.
 
@@ -295,7 +302,7 @@ const transitPillar = defineSurface({
 const layout = resolveLayout(adSpec, transitPillar);
 ~~~
 
-The profile participates in stack, split, and ribbon evaluation like every other profile. The live Interview Mode performs this same operation from form values.
+The profile participates in stack, editorial, split, and ribbon evaluation like every other profile. The live Interview Mode performs this same operation from form values.
 
 ### Add a renderer
 
@@ -341,10 +348,9 @@ The test script compiles the resolver suite into a temporary folder and runs it 
 This engine favors explicit rules and explainability over a broad general-purpose solver:
 
 - It uses a small set of geometric candidate families instead of linear programming.
-- Text fitting estimates character widths. A production typography system should use actual font measurement and shaping.
+- The browser uses real width measurement; server output uses estimates. Line-height handling assumes Arial; advanced shaping, bidirectional text, custom fonts and grapheme clusters are not fully modeled.
 - It supports a focused element taxonomy, with one primary hero, action, and branding element in the supplied campaign model.
 - It does not animate between resolved layouts.
 - It does not include platform certification for ad-network safe zones, broadcast standards, print bleed, or accessibility contrast ratios.
 
 These boundaries are deliberate. They leave a compact, well-tested core that can be explained, extended, and demonstrated live.
-

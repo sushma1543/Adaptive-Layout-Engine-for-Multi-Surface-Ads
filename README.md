@@ -1,7 +1,5 @@
 # Adaptive Layout Lab
 
-Live deployment: https://adaptive-layout-assignment-khl83s97w-shushma.vercel.app
-
 > FLAM AI Super Dream Internship / Placement — Frontend R&D assignment  
 > A single declarative ad spec, resolved into safe, usable layouts for fundamentally different screens.
 
@@ -16,18 +14,18 @@ The goal is not to scale one design uniformly. The engine chooses among generic 
 | One content spec | Every campaign is created with defineAd and contains semantic elements: branding, headline, hero, body copy, price, and CTA. |
 | Four required surface types | Mobile portrait, mobile landscape, broadcast lower-third, and retail kiosk profiles are included. |
 | Real constraints | Each surface carries dimensions, safe-area insets, viewing distance, minimum type size, tap target, and touch-only constraints where applicable. |
-| Meaningfully different layouts | The resolver evaluates vertical stack, horizontal split, and ultra-wide ribbon candidates. It chooses by geometry and fit score, not by a surface name. |
+| Meaningfully different layouts | The resolver evaluates vertical stack, editorial (copy first), horizontal split, and ultra-wide ribbon candidates. It chooses by geometry and fit score, not by a surface name. |
 | Priority degradation | It contracts the hero before removing optional elements. Optional elements are removed from the highest numeric priority downward; required headline, hero, and CTA remain protected. |
 | No overlaps or clipping | A final invariant checks every visible box against the safe frame and every other visible box. An impossible layout returns a clear error rather than silently rendering a broken creative. |
 | Typed output | The renderer receives typed resolved rectangles, statuses, fitted text, a composition choice, and a human-readable decision trace. |
 
-The demo also includes a QR landing panel, a deliberately constrained coupon profile, and an Interview Mode where an unknown surface can be created live without adding a resolver branch.
+The demo includes 10 surface profiles, seven bundled product images, and an Interview Mode where an unknown surface can be created live without adding a resolver branch.
 
 ## Run it in VS Code
 
 1. Extract the project ZIP.
 2. Open the extracted **adaptive-layout-assignment** folder in Visual Studio Code. It must be the folder that contains package.json.
-3. Install Node.js 22.13 or newer. Node 22 LTS is recommended.
+3. Install Node.js 22.13 or newer.
 4. In VS Code, choose **Terminal → New Terminal**, then run:
 
 ~~~sh
@@ -52,10 +50,12 @@ You can also select **Command Prompt** as the VS Code terminal profile. No API k
 1. Choose one of the four realistic campaign themes. Each has its own brand, quote, visual treatment, headline, price, CTA, and art direction.
 2. Inspect the live surface matrix. Every preview is resolved independently from the same campaign spec.
 3. Select a surface to open the focused inspector. It shows its usable area, hard constraints, selected composition, element statuses, and exact decision trace.
-4. Edit the brand, headline, description, price, CTA, or hero image. The update flows through the same resolver for every surface.
+4. Edit the brand, headline, description, price, CTA, or hero image. Choose from seven local product photographs or upload PNG/JPEG/WebP. Use **Show full product** to retain the entire image or **Fill image area** for cropping. The update flows through the same resolver for every surface.
 5. Enable **Safe areas** and **Boxes** to inspect the resolved geometry.
 6. Select the constrained coupon profile or enter a smaller custom surface in **Interview Mode**. Observe lower-priority branding and secondary copy disappear cleanly before required content is compromised.
 7. Download the selected layout as SVG or PNG, save the editable JSON project, or export a campaign kit ZIP containing the spec, resolution manifest, and one SVG per active surface.
+
+Use the surface dropdown to focus any of the 10 profiles. **Actual pixels** displays the native canvas in a scrollable frame; otherwise the whole resolved canvas is uniformly scaled to fit its preview, including text. The editor uses Canvas text measurement after mounting, with a conservative estimator for server rendering.
 
 The editor autosaves the current working copy in the browser. JSON export is the portable way to move a campaign to another browser or computer.
 
@@ -69,6 +69,10 @@ The editor autosaves the current working copy in the browser. JSON export is the
 | Retail kiosk | 1080 × 1080 | Square composition, touch-only, 64 px minimum tap target |
 | QR landing panel | 720 × 1280 | Large vertical touch destination with QR handoff context |
 | Constrained coupon | 260 × 154 | Intentional priority pressure for visible degradation |
+| Social story | 1080 × 1920 | Large top/bottom safe areas, 72 px touch target |
+| Editorial feed | 1080 × 1350 | Portrait feed, 26 px minimum type |
+| Desktop billboard | 1600 × 900 | Wide web placement, 48 px touch target |
+| Transit display | 900 × 1600 | Distant viewing, 32 px minimum type |
 
 The resolver does not inspect profile.id or profile.name. A profile is only input data: dimensions, safe frame, and constraints.
 
@@ -89,10 +93,10 @@ The TypeScript resolver is framework-agnostic. React is only responsible for edi
 
 1. **Validate the input.** defineAd checks element identifiers, required semantic roles, content, priorities, and theme colors. defineSurface checks positive dimensions, valid safe areas, touch-target requirements, and far-viewing minimum type.
 2. **Calculate the usable frame.** Surface safe-area insets are subtracted before any element is positioned.
-3. **Evaluate generic composition candidates.** Stack, split, and ribbon candidates all run for every surface. Each has a target aspect ratio and a starting hero share, but none is tied to a profile name.
+3. **Evaluate generic composition candidates.** Stack, editorial, split, and ribbon candidates all run for every surface. Each has a target aspect ratio and a starting hero share, but none is tied to a profile name.
 4. **Reserve the non-negotiables.** A candidate establishes hero and copy regions, reserves an action box large enough for the surface’s touch and type requirements, then lays out branding and copy in the remaining region.
-5. **Fit text within real boxes.** The text fitter wraps words using conservative character-width estimates, reduces font size only down to the allowed threshold, and adds an ellipsis when a configured line limit still cannot contain the content.
-6. **Try graceful degradation.** If a candidate cannot fit, the resolver contracts its hero region step by step. If that is still insufficient, it removes optional elements in predictable priority order. Required elements are not intentionally removed.
+5. **Fit text within real boxes.** The text fitter accepts an injected measurement function. The editor measures the actual Arial font and weight using Canvas; server rendering and standalone calls use conservative estimates. It wraps words, reduces font size only to the hard minimum, and verifies every emitted line in both dimensions, including an ellipsis.
+6. **Try graceful degradation.** If a candidate cannot fit, the resolver contracts its hero region step by step. If that is still insufficient, it removes optional elements in predictable priority order. Primary, hero, action and explicitly required elements are never removed. A first pass tries to preserve complete protected text through all candidate/degradation choices; only if none works does a second pass allow explicit shortening.
 7. **Verify the result.** Every visible rectangle must be inside the safe frame and pairwise non-overlapping. Invalid attempts are discarded.
 8. **Score and select.** The engine scores valid candidates by geometric fitness, visible content, readability, hero compression, and degradation cost. The highest-scoring valid candidate becomes the resolved layout.
 
@@ -191,29 +195,42 @@ For a quick manual check:
 - The inspector exposes a textual explanation of the resolved result instead of relying only on visual geometry.
 - User-supplied hero images are restricted to local PNG, JPEG, or WebP data and size-limited before use.
 
+## Verification in this revision
+
+18 automated tests cover all four campaigns on all 10 profiles, 256 generated profiles, native preview proportions, horizontal/vertical text bounds, narrow glyph and ellipsis cases, injected measurement, SVG alignment and escaping, image fitting, asset availability, and JSON round trips. These are resolver, rendering-output and source regression checks; they are not an end-to-end browser screenshot suite. Run the commands below to reproduce validation.
+
+~~~sh
+npm run typecheck
+npm run lint
+npm test
+npm run build
+~~~
+
 ## Known limitations
 
-- Text fitting uses conservative character-width estimates, not browser font shaping or a true text-measurement API. Complex scripts, emoji, and brand fonts should receive visual review.
+- The browser measures text width using Canvas with the renderer's Arial font and weight. Server rendering uses a conservative estimator. Complex-script shaping, bidirectional text, grapheme-aware splitting, font substitutions, and SVG baseline differences still need platform-specific visual review.
 - The example engine supports text, image, and button elements. Adding multiple independently positioned heroes, legal copy blocks, or QR code elements would require extending the solver’s element model.
-- The implementation contains a DOM renderer and SVG/PNG export path; a Canvas backend is an appropriate next extension.
+- The implementation contains a DOM renderer and SVG/PNG export path; PNG uses Canvas to rasterize SVG, not a separate direct Canvas layout renderer.
+- The CTA in the editor demonstrates an action with a notification; the demo does not include checkout or an advertising delivery backend.
+- Branding is a fitted text wordmark. The QR landing profile demonstrates a destination surface, not a generated QR code.
+- Native surfaces support whole-pixel dimensions up to 8192px per axis; large PNG exports depend on browser memory.
 - Safe areas are profile-provided design constraints. They are not a substitute for a platform’s latest advertising policy or broadcast standards.
 - The resolver favors a sensible result over animation. Surface-switch transitions are outside the core algorithm.
 - Extremely small surfaces may have no valid solution once required content and hard constraints are considered. The resolver reports this condition explicitly.
 
 ## Time spent
 
-**Approximately 1 focused implementation day in this delivery, including the resolver, UI, assets, tests, and documentation.**
+AI-assisted implementation and refinement across several sessions. Active development time was not tracked; record your own reviewed implementation time before submitting the assignment.
 
 ## AI disclosure
 
-AI-assisted development tools were used to help explore the interface, scaffold implementation details, draft tests, and improve documentation. The layout model, constraints, degradation policy, and final code should be reviewed and understood by the submitter before the live interview. This disclosure is included because the assignment explicitly permits AI tools when their use is transparent.
+OpenAI Codex was used for implementation, debugging, source review, tests, and documentation. OpenAI ImageGen produced the bundled product images, including the additional headphone, running-shoe, and serum studio views. These are fictional campaign products; names, prices, and claims are demonstration content. The layout model, constraints, degradation policy, and final code should be reviewed and understood by the submitter before the live interview. This disclosure is included because the assignment explicitly permits AI tools when their use is transparent.
 
 ## Suggested two-minute walkthrough
 
 1. Start on the surface matrix and state: “This is one declarative campaign spec being independently resolved for several surfaces.”
-2. Compare mobile portrait, broadcast lower-third, and retail kiosk. Point out the chosen stack, ribbon, and split compositions.
+2. Compare mobile portrait, broadcast lower-third, and retail kiosk. Point out the chosen stack, ribbon, editorial, and split compositions.
 3. Select the constrained coupon and walk through the decision trace: hero compression, then optional-element removal in priority order.
 4. Open Interview Mode, enter a new surface size, and resolve it live.
 5. Show src/resolver.ts and explain that it scores generic candidates without a surface-id condition.
 6. Export the selected surface or the campaign kit to demonstrate that the same resolved geometry drives rendering and output.
-

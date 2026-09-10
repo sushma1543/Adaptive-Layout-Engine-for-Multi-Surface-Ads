@@ -26,9 +26,13 @@ import {
   Zap,
 } from 'lucide-react';
 import { campaignPresets } from './campaigns';
-import { campaignKit, downloadBlob, layoutToPng, layoutToPortableSvg } from './export';
+import { campaignKit, decodeImage, downloadBlob, layoutToPng, layoutToPortableSvg, portableAd } from './export';
 import { degradationSummary, resolveLayout, type ResolvedLayout } from './resolver';
-import { ResolvedAd } from './render-dom';
+import { PosterPreview } from './render-dom';
+import { productAssets, type ProductAsset } from './assets';
+import { createCanvasMeasurer } from './typography';
+import { resolveSafely } from './resolve-safely';
+import type { ResolveOptions } from './resolver';
 import {
   isLocalRasterSource,
   parseAd,
@@ -119,6 +123,9 @@ function SurfaceCard({
   showBoxes,
   onSelect,
   onAction,
+  options,
+  focused,
+  nativeSize,
 }: {
   profile: SurfaceProfile;
   ad: AdSpec;
@@ -127,9 +134,13 @@ function SurfaceCard({
   showBoxes: boolean;
   onSelect: () => void;
   onAction?: () => void;
+  options: ResolveOptions;
+  focused: boolean;
+  nativeSize: boolean;
 }) {
-  const layout = useMemo(() => resolveLayout(ad, profile), [ad, profile]);
-  const status = statusFor(layout);
+  const result = useMemo(() => resolveSafely(ad, profile, options), [ad, profile, options]);
+  const layout = result.layout;
+  const status = layout ? statusFor(layout) : { tone: 'warning', label: 'Needs more space' };
   return (
     <article className={`surface-card ${selected ? 'is-selected' : ''}`}>
       <button className="surface-card-top surface-select" type="button" onClick={onSelect} aria-pressed={selected} aria-label={`Inspect ${profile.name}`}>
@@ -140,11 +151,11 @@ function SurfaceCard({
         <span className={`surface-health ${status.tone}`}><i />{status.label}</span>
       </button>
       <div className="surface-ad-wrap" onClick={onSelect} role="presentation">
-        <ResolvedAd ad={ad} layout={layout} showSafeArea={showGuides} showBoxes={showBoxes} onAction={onAction} />
+        {layout ? <PosterPreview ad={ad} layout={layout} showSafeArea={showGuides} showBoxes={showBoxes} onAction={onAction} maxHeight={focused ? 700 : 480} nativeSize={nativeSize && focused} /> : <div className="surface-error"><p>{result.error}</p></div>}
       </div>
       <div className="surface-card-bottom">
-        <span>{layout.composition} composition</span>
-        <span>{profile.touchOnly ? `${layout.constraints.minTapTarget}px tap` : `${layout.constraints.minTextSize}px min type`}</span>
+        <span>{layout?.composition ?? 'Unresolved'} composition</span>
+        <span>{profile.touchOnly ? `${profile.minTapTarget}px tap` : `${profile.minTextSize}px min type`}</span>
       </div>
     </article>
   );
@@ -157,6 +168,8 @@ export default function App() {
   const [future, setFuture] = useState<AdSpec[]>([]);
   const [selectedSurfaceId, setSelectedSurfaceId] = useState('mobile-interstitial');
   const [focusMode, setFocusMode] = useState(false);
+  const [nativeSize, setNativeSize] = useState(false);
+  const [resolveOptions, setResolveOptions] = useState<ResolveOptions>({});
   const [showGuides, setShowGuides] = useState(false);
   const [showBoxes, setShowBoxes] = useState(false);
   const [customForm, setCustomForm] = useState<CustomForm>(initialCustom);
@@ -172,8 +185,9 @@ export default function App() {
     [customSurface],
   );
   const selected = profiles.find((profile) => profile.id === selectedSurfaceId) ?? profiles[0];
-  const resolved = useMemo(() => resolveLayout(ad, selected), [ad, selected]);
-  const resolvedStatus = statusFor(resolved);
+  const resolution = useMemo(() => resolveSafely(ad, selected, resolveOptions), [ad, selected, resolveOptions]);
+  const resolved = resolution.layout;
+  const resolvedStatus = resolved ? statusFor(resolved) : { tone: 'warning', label: 'Needs more space' };
 
   const commit = (next: AdSpec) => {
     setHistory((entries) => [...entries.slice(-29), ad]);
@@ -201,6 +215,7 @@ export default function App() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      setResolveOptions({ measureText: createCanvasMeasurer() });
       try {
         const raw = window.localStorage.getItem('adaptive-layout-lab-v1');
         if (raw) {
@@ -261,12 +276,22 @@ export default function App() {
         reader.readAsDataURL(file);
       });
       if (!isLocalRasterSource(dataUrl)) throw new Error('Unsafe image source.');
+      await decodeImage(dataUrl);
       commit(withHeroSource(ad, dataUrl));
       setActivePreset('custom');
       setNotice('Your local image now drives the hero element across every surface.');
     } catch {
       setNotice('That image could not be processed.');
     }
+  }
+
+  function chooseAsset(asset: ProductAsset) {
+    commit({ ...ad, elements: ad.elements.map(element => element.type === 'image' && element.role === 'hero' ? { ...element, src: asset.src, alt: asset.alt, fit: 'contain', focalPoint: { x: 50, y: 50 } } : element) });
+    setNotice(asset.label + ' applied across all surfaces.');
+  }
+
+  function setImageFit(fit: 'contain' | 'cover') {
+    commit({ ...ad, elements: ad.elements.map(element => element.type === 'image' && element.role === 'hero' ? { ...element, fit } : element) });
   }
 
   function createCustomSurface() {
@@ -280,6 +305,7 @@ export default function App() {
         touchOnly: customForm.touchOnly,
         viewingDistance: customForm.viewingDistance,
       });
+      resolveLayout(ad, profile, resolveOptions);
       setCustomSurface(profile);
       setSelectedSurfaceId(profile.id);
       setFocusMode(true);
@@ -290,6 +316,7 @@ export default function App() {
   }
 
   async function downloadPng() {
+    if (!resolved) return;
     setExporting('png');
     try {
       const png = await layoutToPng(ad, resolved);
@@ -303,6 +330,7 @@ export default function App() {
   }
 
   async function downloadSvg() {
+    if (!resolved) return;
     setExporting('svg');
     try {
       const svg = await layoutToPortableSvg(ad, resolved);
@@ -318,7 +346,7 @@ export default function App() {
   async function downloadKit() {
     setExporting('kit');
     try {
-      const kit = await campaignKit(ad, profiles);
+      const kit = await campaignKit(ad, profiles, resolveOptions);
       downloadBlob(`${ad.id}-adaptive-kit.zip`, kit);
       setNotice('Campaign kit saved with one SVG for every active surface and a resolution manifest.');
     } catch {
@@ -328,16 +356,21 @@ export default function App() {
     }
   }
 
-  function saveProject() {
-    downloadBlob(`${ad.id}-project.json`, new Blob([JSON.stringify(ad, null, 2)], { type: 'application/json' }));
-    setNotice('Project JSON saved. Import it later to continue working.');
+  async function saveProject() {
+    try {
+    const portable = await portableAd(ad);
+    downloadBlob(`${ad.id}-project.json`, new Blob([JSON.stringify(portable, null, 2)], { type: 'application/json' }));
+    setNotice('Portable JSON saved with its product image embedded.');
+    } catch { setNotice('The image could not be saved. Try another library image.'); }
   }
 
   async function importProject(file?: File) {
     if (!file) return;
     try {
-      if (file.size > 4_000_000) throw new Error('Project exceeds the 4 MB limit.');
+      if (file.size > 12_000_000) throw new Error('Project exceeds the 12 MB limit.');
       const parsed = parseAd(JSON.parse(await file.text()));
+      const importedImage = heroElement(parsed)?.src;
+      if (importedImage) await decodeImage(importedImage);
       commit(parsed);
       setActivePreset('custom');
       setNotice('Project imported. The resolver will re-check every surface now.');
@@ -357,7 +390,7 @@ export default function App() {
         <div className="top-actions">
           <span className="engine-live"><i /> RESOLVER ACTIVE</span>
           <button className="icon-button" type="button" title="Import project JSON" onClick={() => jsonInput.current?.click()}><Upload size={17} /></button>
-          <button className="button button-quiet" type="button" onClick={saveProject}><Save size={16} /> Save JSON</button>
+          <button className="button button-quiet" type="button" onClick={() => void saveProject()}><Save size={16} /> Save JSON</button>
         </div>
       </header>
 
@@ -371,8 +404,8 @@ export default function App() {
           <button className="icon-button" type="button" disabled={!history.length} onClick={undo} title="Undo"><RotateCcw size={17} /></button>
           <button className="icon-button" type="button" disabled={!future.length} onClick={redo} title="Redo"><Redo2 size={17} /></button>
           <i className="bar-divider" />
-          <button className="button button-quiet" type="button" disabled={exporting !== null} onClick={() => void downloadSvg()}><Download size={16} /> SVG</button>
-          <button className="button button-accent" type="button" disabled={exporting !== null} onClick={() => void downloadPng()}><ArrowDownToLine size={16} /> {exporting === 'png' ? 'Rendering…' : 'Export PNG'} <span>{selected.name}</span></button>
+          <button className="button button-quiet" type="button" disabled={exporting !== null || !resolved} onClick={() => void downloadSvg()}><Download size={16} /> SVG</button>
+          <button className="button button-accent" type="button" disabled={exporting !== null || !resolved} onClick={() => void downloadPng()}><ArrowDownToLine size={16} /> {exporting === 'png' ? 'Rendering…' : 'Export PNG'} <span>{selected.name}</span></button>
         </div>
       </section>
 
@@ -404,9 +437,19 @@ export default function App() {
             </section>
 
             <section className="rail-section">
-              <p className="section-kicker">HERO IMAGE</p>
+              <p className="section-kicker">PRODUCT IMAGE LIBRARY <span>07</span></p>
+              <div className="asset-library">
+                {[...productAssets].sort((a, b) => Number(b.category === ad.theme.artwork) - Number(a.category === ad.theme.artwork)).map(asset => (
+                  <button key={asset.src} type="button" className={'asset-choice ' + (heroElement(ad)?.src === asset.src ? 'selected' : '')} onClick={() => chooseAsset(asset)} aria-pressed={heroElement(ad)?.src === asset.src}>
+                    {/* oxlint-disable-next-line next/no-img-element */}
+                    <img src={asset.src} alt={asset.alt} loading="lazy" />
+                    <span>{asset.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="image-options"><label className="field"><span>Image framing</span><select value={heroElement(ad)?.fit ?? 'contain'} onChange={event => setImageFit(event.target.value as 'contain' | 'cover')}><option value="contain">Show full product</option><option value="cover">Fill image area</option></select></label></div>
               <button type="button" className="image-upload" onClick={() => imageInput.current?.click()}><ImagePlus size={21} /><b>{heroElement(ad)?.src ? 'Replace local hero image' : 'Add a local hero image'}</b><small>PNG, JPG or WebP · max 2 MB</small></button>
-              <p className="rail-note"><Sparkles size={15} /> Built-in art direction keeps every theme presentation-ready without external assets.</p>
+              <p className="rail-note"><Sparkles size={15} /> Seven local product images. Full-product framing preserves the entire image across surfaces.</p>
             </section>
           </div>
         </aside>
@@ -422,8 +465,15 @@ export default function App() {
             </div>
           </div>
           <div className="matrix-caption"><span><i /> SAME SPEC · FRESH RESOLUTION</span><span>Click any surface to inspect the decision trace <ArrowUpRight size={13} /></span></div>
+          <div className="surface-picker">
+            <select aria-label="Select surface" value={selectedSurfaceId} onChange={event => { setSelectedSurfaceId(event.target.value); setFocusMode(true); }}>
+              {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.width} × {profile.height}</option>)}
+            </select>
+            <label className="toggle-label"><input type="checkbox" checked={nativeSize} onChange={event => { setNativeSize(event.target.checked); setFocusMode(true); }} /><span>Actual pixels</span></label>
+            <small>{resolveOptions.measureText ? 'Measured text' : 'Estimated text'} · {profiles.length} surfaces</small>
+          </div>
           <div className={`surface-matrix ${focusMode ? 'focus' : ''}`}>
-            {(focusMode ? [selected] : profiles).map((profile) => <SurfaceCard key={profile.id} profile={profile} ad={ad} selected={profile.id === selected.id} showGuides={showGuides} showBoxes={showBoxes} onSelect={() => { setSelectedSurfaceId(profile.id); setFocusMode(true); }} onAction={() => setNotice(`${actionById(ad, 'cta')?.label ?? 'Action'} activated on ${profile.name}.`)} />)}
+            {(focusMode ? [selected] : profiles).map((profile) => <SurfaceCard key={profile.id} options={resolveOptions} focused={focusMode} nativeSize={nativeSize} profile={profile} ad={ad} selected={profile.id === selected.id} showGuides={showGuides} showBoxes={showBoxes} onSelect={() => { setSelectedSurfaceId(profile.id); setFocusMode(true); }} onAction={() => setNotice(`${actionById(ad, 'cta')?.label ?? 'Action'} activated on ${profile.name}.`)} />)}
           </div>
           <footer className="canvas-footer"><span><i /> All visible boxes are bounded and non-overlapping</span><span><Code2 size={14} /> DOM renderer consumes resolved coordinates only</span></footer>
         </section>
@@ -431,6 +481,7 @@ export default function App() {
         <aside className="inspector-rail">
           <div className="panel-heading"><MonitorCog size={17} /><h2>Resolution inspector</h2></div>
           <div className="inspector-scroll">
+            {resolved ? <>
             <section className="selected-surface">
               <span className="section-kicker">SELECTED SURFACE</span>
               <h2>{selected.name}<ArrowUpRight size={19} /></h2>
@@ -441,14 +492,14 @@ export default function App() {
             <section className="composition-card">
               <span className="section-kicker">CHOSEN CANDIDATE</span>
               <div className="composition-title"><span className={`composition-mark composition-${resolved.composition}`}><i /><i /><i /></span><div><b>{resolved.composition}</b><small>score {resolved.score.toFixed(1)} · generic geometry</small></div></div>
-              <p>{resolved.composition === 'stack' ? 'Hero leads vertically; copy flows beneath the image.' : resolved.composition === 'split' ? 'Copy and product divide the available width.' : 'A compact lateral composition preserves far-view readability.'}</p>
+              <p>{resolved.composition === 'stack' ? 'Hero leads vertically; copy flows beneath the image.' : resolved.composition === 'editorial' ? 'The message leads, followed by a generous product image.' : resolved.composition === 'split' ? 'Copy and product divide the available width.' : 'A compact lateral composition preserves far-view readability.'}</p>
             </section>
 
             <section className={`health-card ${resolvedStatus.tone}`}><span><Check size={18} /></span><div><b>{resolvedStatus.label}</b><p>{degradationSummary(resolved)}</p></div></section>
 
             <section className="layout-elements">
               <p className="section-kicker">ELEMENT RESOLUTION</p>
-              {resolved.elements.sort((left, right) => left.priority - right.priority).map((element) => (
+              {[...resolved.elements].sort((left, right) => left.priority - right.priority).map((element) => (
                 <div key={element.id} className={`element-row ${element.visible ? '' : 'dropped'}`}><span className={`role-dot role-${element.role}`} /><div><b>{element.id}</b><small>{element.type} · p{element.priority}{element.text ? ` · ${Math.round(element.text.fontSize)}px` : ''}</small></div><em>{element.visible ? element.status : 'dropped'}</em></div>
               ))}
             </section>
@@ -459,6 +510,7 @@ export default function App() {
             </section>
 
             <section className="export-box"><button className="button button-quiet full" type="button" disabled={exporting !== null} onClick={() => void downloadKit()}><Download size={16} /> {exporting === 'kit' ? 'Packaging…' : 'Export campaign kit'}</button><p>One SVG per active profile, the declarative spec, and a layout manifest.</p></section>
+            </> : <div className="surface-error"><p>{resolution.error} Your campaign is preserved; choose a larger surface or reduce minimum sizes.</p></div>}
           </div>
         </aside>
       </div>

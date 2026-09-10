@@ -15,6 +15,7 @@ import {
 } from '../src/resolver.js';
 import {
   bonusSurfaces,
+  demoSurfaces,
   defineSurface,
   requiredSurfaces,
   SurfaceValidationError,
@@ -22,7 +23,7 @@ import {
 } from '../src/surfaces.js';
 
 const epsilon = 0.001;
-const demoProfiles = [...requiredSurfaces, ...bonusSurfaces];
+const demoProfiles = demoSurfaces;
 
 // These declarations are compile-time contracts. `tsc --noEmit` must keep
 // reporting both invalid role/type combinations and invalid priority values.
@@ -203,9 +204,10 @@ function randomInt(random: () => number, min: number, max: number): number {
   return Math.floor(random() * (max - min + 1)) + min;
 }
 
-void test('all four required and two constrained profiles resolve every shipped campaign without overlap or clipping', () => {
+void test('all ten profiles resolve every shipped campaign without overlap or clipping', () => {
   assert.equal(requiredSurfaces.length, 4, 'the required demo profile count is preserved');
   assert.equal(bonusSurfaces.length, 2, 'the intentional pressure and QR profiles are covered');
+  assert.equal(demoProfiles.length, 10);
 
   for (const { spec } of campaignPresets) {
     for (const surface of demoProfiles) {
