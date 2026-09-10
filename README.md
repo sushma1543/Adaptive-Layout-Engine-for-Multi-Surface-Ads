@@ -226,7 +226,7 @@ AI-assisted implementation and refinement across several sessions. Active develo
 
 ## AI disclosure
 
-OpenAI Codex was used for implementation, debugging, source review, tests, and documentation. OpenAI ImageGen produced the bundled product images, including the additional headphone, running-shoe, and serum studio views. These are fictional campaign products; names, prices, and claims are demonstration content. The layout model, constraints, degradation policy, and final code should be reviewed and understood by the submitter before the live interview. This disclosure is included because the assignment explicitly permits AI tools when their use is transparent.
+This project was helped with AI assistance during implementation, debugging, source review, tests, and documentation. The bundled product images were also generated with AI assistance for the additional headphone, running-shoe, and serum studio views. These are fictional campaign products; names, prices, and claims are demonstration content. The layout model, constraints, degradation policy, and final code should be reviewed and understood by the submitter before the live interview. This disclosure is included because the assignment explicitly permits AI tools when their use is transparent.
 
 ## Suggested two-minute walkthrough
 
