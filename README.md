@@ -1,5 +1,7 @@
 # Adaptive Layout Lab
 
+Live deployment: https://adaptive-layout-assignment-rmypju1jm-shushma.vercel.app
+
 > FLAM AI Super Dream Internship / Placement — Frontend R&D assignment  
 > A single declarative ad spec, resolved into safe, usable layouts for fundamentally different screens.
 
